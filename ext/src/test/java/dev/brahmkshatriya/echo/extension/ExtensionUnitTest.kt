@@ -3,14 +3,12 @@ package dev.brahmkshatriya.echo.extension
 import dev.brahmkshatriya.echo.common.clients.AlbumClient
 import dev.brahmkshatriya.echo.common.clients.ExtensionClient
 import dev.brahmkshatriya.echo.common.clients.HomeFeedClient
-import dev.brahmkshatriya.echo.common.clients.LoginClient
 import dev.brahmkshatriya.echo.common.clients.RadioClient
-import dev.brahmkshatriya.echo.common.clients.SearchFeedClient
+import dev.brahmkshatriya.echo.common.clients.SearchClient
 import dev.brahmkshatriya.echo.common.clients.TrackClient
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
-import dev.brahmkshatriya.echo.common.models.Shelf
+import dev.brahmkshatriya.echo.common.models.MediaItemsContainer
 import dev.brahmkshatriya.echo.common.models.Track
-import dev.brahmkshatriya.echo.common.models.User
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -29,19 +27,14 @@ import kotlin.system.measureTimeMillis
 class ExtensionUnitTest {
     private val extension: ExtensionClient = TestExtension()
     private val searchQuery = "Skrillex"
-    private val user = User("","Test User")
 
-    // Test Setup
     private val mainThreadSurrogate = newSingleThreadContext("UI thread")
+
     @Before
     fun setUp() {
         Dispatchers.setMain(mainThreadSurrogate)
         extension.setSettings(MockedSettings())
-        runBlocking {
-            extension.onExtensionSelected()
-            if (extension is LoginClient)
-                extension.onSetLoginUser(user)
-        }
+        runBlocking { extension.onExtensionSelected() }
     }
 
     @After
@@ -56,7 +49,6 @@ class ExtensionUnitTest {
         println("\n")
     }
 
-    // Actual Tests
     @Test
     fun testHomeFeed() = testIn("Testing Home Feed") {
         if (extension !is HomeFeedClient) error("HomeFeedClient is not implemented")
@@ -77,9 +69,9 @@ class ExtensionUnitTest {
     }
 
     @Test
-    fun testEmptyQuickSearch() = testIn("Testing Empty Quick Search") {
-        if (extension !is SearchFeedClient) error("SearchClient is not implemented")
-        val search = extension.quickSearch("")
+    fun testNullQuickSearch() = testIn("Testing Null Quick Search") {
+        if (extension !is SearchClient) error("SearchClient is not implemented")
+        val search = extension.quickSearch(null)
         search.forEach {
             println(it)
         }
@@ -87,7 +79,7 @@ class ExtensionUnitTest {
 
     @Test
     fun testQuickSearch() = testIn("Testing Quick Search") {
-        if (extension !is SearchFeedClient) error("SearchClient is not implemented")
+        if (extension !is SearchClient) error("SearchClient is not implemented")
         val search = extension.quickSearch(searchQuery)
         search.forEach {
             println(it)
@@ -95,10 +87,9 @@ class ExtensionUnitTest {
     }
 
     @Test
-    fun testEmptySearch() = testIn("Testing Empty Search") {
-        if (extension !is SearchFeedClient) error("SearchFeedClient is not implemented")
-        val tab = extension.searchTabs("").firstOrNull()
-        val search = extension.searchFeed("", tab).loadFirst()
+    fun testNullSearch() = testIn("Testing Null Search") {
+        if (extension !is SearchClient) error("SearchClient is not implemented")
+        val search = extension.searchFeed(null, null).loadFirst()
         search.forEach {
             println(it)
         }
@@ -106,10 +97,10 @@ class ExtensionUnitTest {
 
     @Test
     fun testSearch() = testIn("Testing Search") {
-        if (extension !is SearchFeedClient) error("SearchFeedClient is not implemented")
+        if (extension !is SearchClient) error("SearchClient is not implemented")
         println("Tabs")
         extension.searchTabs(searchQuery).forEach {
-            println(it.title)
+            println(it.name)
         }
         println("Search Results")
         val search = extension.searchFeed(searchQuery, null).loadFirst()
@@ -118,19 +109,29 @@ class ExtensionUnitTest {
         }
     }
 
+    @Test
+    fun testSearchWithTab() = testIn("Testing Search with Tab") {
+        if (extension !is SearchClient) error("SearchClient is not implemented")
+        val tab = extension.searchTabs(searchQuery).firstOrNull()
+        val search = extension.searchFeed(searchQuery, tab).loadFirst()
+        search.forEach {
+            println(it)
+        }
+    }
+
+
     private suspend fun searchTrack(q: String? = null): Track {
-        if (extension !is SearchFeedClient) error("SearchFeedClient is not implemented")
+        if (extension !is SearchClient) error("SearchClient is not implemented")
         val query = q ?: searchQuery
         println("Searching  : $query")
-        val tab = extension.searchTabs(query).firstOrNull()
-        val items = extension.searchFeed(query, tab).loadFirst()
+        val items = extension.searchFeed(query, null).loadFirst()
         val track = items.firstNotNullOfOrNull {
-            when (it) {
-                is Shelf.Item -> (it.media as? EchoMediaItem.TrackItem)?.track
-                is Shelf.Lists.Tracks -> it.list.firstOrNull()
-                is Shelf.Lists.Items -> (it.list.firstOrNull() as? EchoMediaItem.TrackItem)?.track
+            val item = when (it) {
+                is MediaItemsContainer.Item -> it.media
+                is MediaItemsContainer.Category -> it.list.firstOrNull()
                 else -> null
             }
+            (item as? EchoMediaItem.TrackItem)?.track
         }
         return track ?: error("Track not found, try a different search query")
     }
@@ -141,7 +142,7 @@ class ExtensionUnitTest {
         val search = searchTrack()
         measureTimeMillis {
             val track = extension.loadTrack(search)
-            println(track)
+            println(track.liked)
         }.also { println("time : $it") }
     }
 
@@ -151,9 +152,9 @@ class ExtensionUnitTest {
         val search = searchTrack()
         measureTimeMillis {
             val track = extension.loadTrack(search)
-            val streamable = track.servers.firstOrNull()
+            val streamable = track.audioStreamables.firstOrNull()
                 ?: error("Track is not streamable")
-            val stream = extension.loadStreamableMedia(streamable, false)
+            val stream = extension.getStreamableAudio(streamable)
             println(stream)
         }.also { println("time : $it") }
     }
@@ -163,7 +164,7 @@ class ExtensionUnitTest {
         if (extension !is TrackClient) error("TrackClient is not implemented")
         if (extension !is RadioClient) error("RadioClient is not implemented")
         val track = extension.loadTrack(searchTrack())
-        val radio = extension.radio(track, null)
+        val radio = extension.radio(track)
         val radioTracks = extension.loadTracks(radio).loadFirst()
         radioTracks.forEach {
             println(it)
@@ -171,10 +172,10 @@ class ExtensionUnitTest {
     }
 
     @Test
-    fun testTrackShelves() = testIn("Testing Track Shelves") {
+    fun testTrackMediaItems() = testIn("Testing Track Media Items") {
         if (extension !is TrackClient) error("TrackClient is not implemented")
-        val track = extension.loadTrack(searchTrack())
-        val mediaItems = extension.getShelves(track).loadFirst()
+        val track = extension.loadTrack(Track("iDkSRTBDxJY", ""))
+        val mediaItems = extension.getMediaItems(track).loadFirst()
         mediaItems.forEach {
             println(it)
         }
@@ -187,7 +188,7 @@ class ExtensionUnitTest {
         if (extension !is AlbumClient) error("AlbumClient is not implemented")
         val album = extension.loadAlbum(small)
         println(album)
-        val mediaItems = extension.getShelves(album).loadFirst()
+        val mediaItems = extension.getMediaItems(album).loadFirst()
         mediaItems.forEach {
             println(it)
         }
