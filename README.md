@@ -10,7 +10,7 @@ Clone this repository and name it as you want.
 
 ### 2. Configure the [gradle.properties](gradle.properties)
 The file will have the following properties:
-- `libVersion` - The version of the Echo library, defaults to `main-SNAPSHOT`.
+- `libVersion` - The version of the Echo library, defaults to `SNAPSHOT`.
 - `extType` - The type of the extension you want to create. It can be `music`, `tracker`
   or `lyrics`. More information can be found
   in [`Extension<*>`](https://github.com/brahmkshatriya/echo/blob/main/common/src/main/java/dev/brahmkshatriya/echo/common/Extension.kt#L33-L43)
@@ -71,4 +71,4 @@ You need to do the following steps to publish the extension:
 - Generate a keystore file : https://developer.android.com/studio/publish/app-signing#generate-key
 - Add action secrets in the repository settings (Settings -> Secrets and variables -> Actions -> New repository secret):
     - `KEYSTORE_B64` - The base64 encoded keystore file. [How to](https://stackoverflow.com/a/70396534)
-    - `PASSWORD` - The password of the keystore file.
+    - `KEYSTORE_PASSWORD` - The password of the keystore file.
