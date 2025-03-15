@@ -2,42 +2,52 @@ package dev.brahmkshatriya.echo.extension
 
 import dev.brahmkshatriya.echo.common.clients.ExtensionClient
 import dev.brahmkshatriya.echo.common.clients.HomeFeedClient
+import dev.brahmkshatriya.echo.common.clients.RadioClient
+import dev.brahmkshatriya.echo.common.clients.SearchFeedClient
 import dev.brahmkshatriya.echo.common.clients.TrackClient
+import dev.brahmkshatriya.echo.common.helpers.ClientException
 import dev.brahmkshatriya.echo.common.helpers.ContinuationCallback.Companion.await
 import dev.brahmkshatriya.echo.common.helpers.PagedData
+import dev.brahmkshatriya.echo.common.models.Album
+import dev.brahmkshatriya.echo.common.models.Artist
+import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem.Companion.toMediaItem
 import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toImageHolder
+import dev.brahmkshatriya.echo.common.models.Playlist
+import dev.brahmkshatriya.echo.common.models.QuickSearchItem
+import dev.brahmkshatriya.echo.common.models.Radio
 import dev.brahmkshatriya.echo.common.models.Shelf
 import dev.brahmkshatriya.echo.common.models.Streamable
 import dev.brahmkshatriya.echo.common.models.Streamable.Media.Companion.toServerMedia
+import dev.brahmkshatriya.echo.common.models.Streamable.Source.Companion.toSource
 import dev.brahmkshatriya.echo.common.models.Tab
 import dev.brahmkshatriya.echo.common.models.Track
+import dev.brahmkshatriya.echo.common.models.User
 import dev.brahmkshatriya.echo.common.settings.Setting
 import dev.brahmkshatriya.echo.common.settings.Settings
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-class TestExtension : ExtensionClient, HomeFeedClient, TrackClient {
+class TestExtension : ExtensionClient, HomeFeedClient, TrackClient, RadioClient, SearchFeedClient {
     override suspend fun onExtensionSelected() {}
 
     override val settingItems: List<Setting> = emptyList()
-    val apiLink = "https://opml.radiotime.com/"
-    val client = OkHttpClient()
+    private val apiLink = "https://opml.radiotime.com/"
+    private val client = OkHttpClient()
     private lateinit var setting: Settings
     override fun setSettings(settings: Settings) {
         setting = settings
     }
 
-    val homeFeedRegex =
-        Regex("text=\\\"(.+)\\\" URL=\\\"(.+)\\\" bitrate=.+ subtext=\\\"(.+)\\\" genre_id=.+ image=\\\"(.+)\\\" ")
+    private val typeRegex = Regex("type=\"([^\"]+)\" (.*)")
+    private val audioRegex =
+        Regex("text=\"(.+)\" URL=\"(.+)\" bitrate=.+ subtext=\"(.+)\" genre_id=.+ image=\"(.+)\" ")
+    private val linkRegex = Regex("text=\"(.+)\" URL=\"(.+)\" ")
 
-    override fun getHomeFeed(tab: Tab?): PagedData<Shelf> {
-
-        return PagedData.Single {
-            val request = Request.Builder().url(tab!!.id).build()
-            val response = client.newCall(request).await()
-            val apiResponse = response.body.string()
-            homeFeedRegex.findAll(apiResponse).map {
+    private fun String.toShelf(): List<Shelf> = typeRegex.findAll(this).mapNotNull { result ->
+        val (type, content) = result.destructured
+        when (type) {
+            "audio" -> audioRegex.find(content)?.let {
                 val (text, link, subtext, image) = it.destructured
                 Track(
                     id = link,
@@ -47,18 +57,43 @@ class TestExtension : ExtensionClient, HomeFeedClient, TrackClient {
                     cover = image.toImageHolder(),
                     streamables = listOf(Streamable.server(link, 0))
                 ).toMediaItem().toShelf()
-            }.toList()
+            }
+
+            "link" -> linkRegex.find(content)?.let {
+                val (text, link) = it.destructured
+                Shelf.Category(
+                    title = text,
+                    items = PagedData.Single {
+                        val request = Request.Builder().url(link).build()
+                        val response = client.newCall(request).await()
+                        val apiResponse = response.body.string()
+                        apiResponse.toShelf()
+                    }
+                )
+            }
+
+            else -> throw IllegalArgumentException("Unknown type $type")
+        }
+    }.toList()
+
+    private suspend fun get(url: String): String {
+        val request = Request.Builder().url(url).build()
+        val response = client.newCall(request).await()
+        return response.body.string()
+    }
+
+    override fun getHomeFeed(tab: Tab?): PagedData<Shelf> {
+        return PagedData.Single {
+            val apiResponse = get(tab!!.id)
+            apiResponse.toShelf()
         }
     }
 
-    val homeTabRegex = Regex("text=\\\"(.+)\\\" URL=\\\"(.+)\\\" ")
     override suspend fun getHomeTabs(): List<Tab> {
-        val request = Request.Builder().url(apiLink).build()
-        val response = client.newCall(request).await()
-        val apiResponse = response.body.string()
-        val tabs = homeTabRegex.findAll(apiResponse).map {
-            val (text, link) = it.destructured
-            Tab(link, text)
+        val apiResponse = get(apiLink)
+        val tabs = linkRegex.findAll(apiResponse).map { result ->
+            val (text, link) = result.destructured
+            Tab(title = text, id = link)
         }.toList()
         return tabs
     }
@@ -71,8 +106,34 @@ class TestExtension : ExtensionClient, HomeFeedClient, TrackClient {
         streamable: Streamable,
         isDownload: Boolean
     ): Streamable.Media {
-        return streamable.id.toServerMedia(type = Streamable.SourceType.HLS)
+        val response = get(streamable.id).split("\n")
+        return Streamable.Media.Server(
+            response.map { it.toSource() },
+            false
+        )
     }
 
     override suspend fun loadTrack(track: Track) = track
+    override fun loadTracks(radio: Radio) = PagedData.empty<Track>()
+    override suspend fun radio(track: Track, context: EchoMediaItem?) = Radio("", "Bruh")
+    override suspend fun radio(album: Album) = throw ClientException.NotSupported("Album radio")
+    override suspend fun radio(artist: Artist) = throw ClientException.NotSupported("Artist radio")
+    override suspend fun radio(user: User) = throw ClientException.NotSupported("User radio")
+    override suspend fun radio(playlist: Playlist) =
+        throw ClientException.NotSupported("Playlist radio")
+
+    override suspend fun deleteQuickSearch(item: QuickSearchItem) {}
+    override suspend fun quickSearch(query: String): List<QuickSearchItem> {
+        return emptyList()
+    }
+
+    override fun searchFeed(query: String, tab: Tab?): PagedData<Shelf> {
+        val api = "${apiLink}Search.ashx?query=$query"
+        return PagedData.Single {
+            val apiResponse = get(api)
+            apiResponse.toShelf()
+        }
+    }
+
+    override suspend fun searchTabs(query: String) = emptyList<Tab>()
 }
