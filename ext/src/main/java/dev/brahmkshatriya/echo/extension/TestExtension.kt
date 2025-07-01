@@ -12,6 +12,7 @@ import dev.brahmkshatriya.echo.common.models.Album
 import dev.brahmkshatriya.echo.common.models.Artist
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem
 import dev.brahmkshatriya.echo.common.models.EchoMediaItem.Companion.toMediaItem
+import dev.brahmkshatriya.echo.common.models.Feed.Companion.toFeed
 import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toImageHolder
 import dev.brahmkshatriya.echo.common.models.Playlist
 import dev.brahmkshatriya.echo.common.models.QuickSearchItem
@@ -20,6 +21,7 @@ import dev.brahmkshatriya.echo.common.models.Shelf
 import dev.brahmkshatriya.echo.common.models.Streamable
 import dev.brahmkshatriya.echo.common.models.Streamable.Media.Companion.toServerMedia
 import dev.brahmkshatriya.echo.common.models.Streamable.Source.Companion.toSource
+import dev.brahmkshatriya.echo.common.models.Streamable.SourceType
 import dev.brahmkshatriya.echo.common.models.Tab
 import dev.brahmkshatriya.echo.common.models.Track
 import dev.brahmkshatriya.echo.common.models.User
@@ -82,12 +84,10 @@ class TestExtension : ExtensionClient, HomeFeedClient, TrackClient, RadioClient,
         return response.body.string()
     }
 
-    override fun getHomeFeed(tab: Tab?): PagedData<Shelf> {
-        return PagedData.Single {
-            val apiResponse = get(tab!!.id)
-            apiResponse.toShelf()
-        }
-    }
+    override fun getHomeFeed(tab: Tab?) = PagedData.Single {
+        val apiResponse = get(tab!!.id)
+        apiResponse.toShelf()
+    }.toFeed()
 
     override suspend fun getHomeTabs(): List<Tab> {
         val apiResponse = get(apiLink)
@@ -127,13 +127,10 @@ class TestExtension : ExtensionClient, HomeFeedClient, TrackClient, RadioClient,
         return emptyList()
     }
 
-    override fun searchFeed(query: String, tab: Tab?): PagedData<Shelf> {
-        val api = "${apiLink}Search.ashx?query=$query"
-        return PagedData.Single {
-            val apiResponse = get(api)
-            apiResponse.toShelf()
-        }
-    }
+    override fun searchFeed(query: String, tab: Tab?) = PagedData.Single {
+        val apiResponse = get("${apiLink}Search.ashx?query=$query")
+        apiResponse.toShelf()
+    }.toFeed()
 
     override suspend fun searchTabs(query: String) = emptyList<Tab>()
 }
